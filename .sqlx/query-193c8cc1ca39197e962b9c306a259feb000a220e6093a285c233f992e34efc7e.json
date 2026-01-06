@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO contacts (user_id, first_name, last_name, email, phone, short_note, notes) \n         VALUES ($1, $2, $3, $4, $5, $6, $7) \n         RETURNING contact_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "contact_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "193c8cc1ca39197e962b9c306a259feb000a220e6093a285c233f992e34efc7e"
+}

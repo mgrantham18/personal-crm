@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y \
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
+# Copy sqlx offline query cache
+COPY .sqlx ./.sqlx
+
 # Create a dummy main.rs to build dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs && echo "" > src/lib.rs
 
@@ -22,7 +25,8 @@ RUN cargo build --release && rm -rf src
 COPY src ./src
 COPY schema.sql ./
 
-# Build the actual application
+# Build the actual application (with sqlx offline mode)
+ENV SQLX_OFFLINE=true
 RUN touch src/main.rs src/lib.rs && cargo build --release
 
 # Runtime stage
