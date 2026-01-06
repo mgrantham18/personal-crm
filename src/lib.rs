@@ -17,9 +17,16 @@ pub struct Auth0Claims {
     pub sub: String,
     pub email: Option<String>,
     pub name: Option<String>,
-    pub iss: String,
-    pub aud: Vec<String>,
-    pub exp: usize,
+    pub iss: Option<String>,
+    pub aud: Option<serde_json::Value>,
+    pub exp: Option<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct UserInfoResponse {
+    sub: String,
+    email: Option<String>,
+    name: Option<String>,
 }
 
 impl FromRequest for AuthUser {
@@ -49,51 +56,21 @@ impl FromRequest for AuthUser {
             
             let auth0_domain = std::env::var("AUTH0_DOMAIN")
                 .unwrap_or_else(|_| "dev-example.auth0.com".to_string());
-            let jwks_uri = format!("https://{}/.well-known/jwks.json", auth0_domain);
             
-            let jwks_response = reqwest::get(&jwks_uri)
-                .await
-                .map_err(|_| ErrorUnauthorized("Failed to fetch JWKS"))?
-                .text()
-                .await
-                .map_err(|_| ErrorUnauthorized("Failed to read JWKS"))?;
-            
-            let jwks: serde_json::Value = serde_json::from_str(&jwks_response)
-                .map_err(|_| ErrorUnauthorized("Invalid JWKS format"))?;
-            
-            let keys = jwks["keys"].as_array()
-                .ok_or_else(|| ErrorUnauthorized("No keys in JWKS"))?;
-            
-            if keys.is_empty() {
-                return Err(ErrorUnauthorized("Empty JWKS"));
-            }
-            
-            let first_key = &keys[0];
-            let n = first_key["n"].as_str()
-                .ok_or_else(|| ErrorUnauthorized("Missing n in key"))?;
-            let e = first_key["e"].as_str()
-                .ok_or_else(|| ErrorUnauthorized("Missing e in key"))?;
-            
-            let decoding_key = DecodingKey::from_rsa_components(n, e)
-                .map_err(|_| ErrorUnauthorized("Failed to create decoding key"))?;
-            
-            let mut validation = Validation::new(Algorithm::RS256);
-            validation.validate_exp = true;
-            validation.set_issuer(&[format!("https://{}/", auth0_domain)]);
-            // Skip audience validation as Auth0 iOS SDK may not set it for userinfo calls
-            validation.validate_aud = false;
-            
-            let token_data = decode::<Auth0Claims>(token, &decoding_key, &validation)
-                .map_err(|e| {
-                    eprintln!("Token validation error: {:?}", e);
-                    ErrorUnauthorized("Invalid token")
-                })?;
+            // Try to validate as JWT first, fall back to userinfo endpoint for opaque tokens
+            let claims = match validate_jwt(token, &auth0_domain).await {
+                Ok(claims) => claims,
+                Err(_) => {
+                    // Token might be opaque, try userinfo endpoint
+                    validate_via_userinfo(token, &auth0_domain).await?
+                }
+            };
             
             let pool = pool.ok_or_else(|| ErrorUnauthorized("Database not available"))?;
             
             let user_result = sqlx::query!(
                 "SELECT user_id, auth0_id, email, name FROM users WHERE auth0_id = $1",
-                token_data.claims.sub
+                claims.sub
             )
             .fetch_optional(pool.get_ref())
             .await
@@ -109,9 +86,9 @@ impl FromRequest for AuthUser {
                 None => {
                     let new_user = sqlx::query!(
                         "INSERT INTO users (auth0_id, email, name) VALUES ($1, $2, $3) RETURNING user_id, auth0_id, email, name",
-                        token_data.claims.sub,
-                        token_data.claims.email,
-                        token_data.claims.name
+                        claims.sub,
+                        claims.email,
+                        claims.name
                     )
                     .fetch_one(pool.get_ref())
                     .await
@@ -127,6 +104,86 @@ impl FromRequest for AuthUser {
             }
         })
     }
+}
+
+async fn validate_jwt(token: &str, auth0_domain: &str) -> Result<Auth0Claims, Error> {
+    let jwks_uri = format!("https://{}/.well-known/jwks.json", auth0_domain);
+    
+    let jwks_response = reqwest::get(&jwks_uri)
+        .await
+        .map_err(|_| ErrorUnauthorized("Failed to fetch JWKS"))?
+        .text()
+        .await
+        .map_err(|_| ErrorUnauthorized("Failed to read JWKS"))?;
+    
+    let jwks: serde_json::Value = serde_json::from_str(&jwks_response)
+        .map_err(|_| ErrorUnauthorized("Invalid JWKS format"))?;
+    
+    let keys = jwks["keys"].as_array()
+        .ok_or_else(|| ErrorUnauthorized("No keys in JWKS"))?;
+    
+    if keys.is_empty() {
+        return Err(ErrorUnauthorized("Empty JWKS"));
+    }
+    
+    let first_key = &keys[0];
+    let n = first_key["n"].as_str()
+        .ok_or_else(|| ErrorUnauthorized("Missing n in key"))?;
+    let e = first_key["e"].as_str()
+        .ok_or_else(|| ErrorUnauthorized("Missing e in key"))?;
+    
+    let decoding_key = DecodingKey::from_rsa_components(n, e)
+        .map_err(|_| ErrorUnauthorized("Failed to create decoding key"))?;
+    
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.validate_exp = true;
+    validation.set_issuer(&[format!("https://{}/", auth0_domain)]);
+    validation.validate_aud = false;
+    
+    let token_data = decode::<Auth0Claims>(token, &decoding_key, &validation)
+        .map_err(|e| {
+            eprintln!("JWT validation error: {:?}", e);
+            ErrorUnauthorized("Invalid JWT token")
+        })?;
+    
+    Ok(token_data.claims)
+}
+
+async fn validate_via_userinfo(token: &str, auth0_domain: &str) -> Result<Auth0Claims, Error> {
+    let userinfo_url = format!("https://{}/userinfo", auth0_domain);
+    
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&userinfo_url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| {
+            eprintln!("Userinfo request error: {:?}", e);
+            ErrorUnauthorized("Failed to validate token")
+        })?;
+    
+    if !response.status().is_success() {
+        eprintln!("Userinfo returned status: {}", response.status());
+        return Err(ErrorUnauthorized("Invalid token"));
+    }
+    
+    let user_info: UserInfoResponse = response
+        .json()
+        .await
+        .map_err(|e| {
+            eprintln!("Userinfo parse error: {:?}", e);
+            ErrorUnauthorized("Failed to parse userinfo")
+        })?;
+    
+    Ok(Auth0Claims {
+        sub: user_info.sub,
+        email: user_info.email,
+        name: user_info.name,
+        iss: None,
+        aud: None,
+        exp: None,
+    })
 }
 
 pub async fn db() -> PgPool {
