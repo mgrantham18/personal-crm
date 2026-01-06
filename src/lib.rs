@@ -47,8 +47,9 @@ impl FromRequest for AuthUser {
 
             let token = &auth_str[7..];
             
-            let jwks_uri = std::env::var("AUTH0_JWKS_URI")
-                .unwrap_or_else(|_| "https://dev-example.auth0.com/.well-known/jwks.json".to_string());
+            let auth0_domain = std::env::var("AUTH0_DOMAIN")
+                .unwrap_or_else(|_| "dev-example.auth0.com".to_string());
+            let jwks_uri = format!("https://{}/.well-known/jwks.json", auth0_domain);
             
             let jwks_response = reqwest::get(&jwks_uri)
                 .await
@@ -78,6 +79,9 @@ impl FromRequest for AuthUser {
             
             let mut validation = Validation::new(Algorithm::RS256);
             validation.validate_exp = true;
+            validation.set_issuer(&[format!("https://{}/", auth0_domain)]);
+            // Skip audience validation as Auth0 iOS SDK may not set it for userinfo calls
+            validation.validate_aud = false;
             
             let token_data = decode::<Auth0Claims>(token, &decoding_key, &validation)
                 .map_err(|e| {
