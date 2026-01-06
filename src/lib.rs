@@ -128,6 +128,16 @@ impl FromRequest for AuthUser {
 pub async fn db() -> PgPool {
     dotenv().ok();
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let pool = sqlx::postgres::PgPool::connect(&database_url).await.unwrap();
-    pool
+    
+    // Validate URL format before attempting connection
+    if !database_url.starts_with("postgres://") && !database_url.starts_with("postgresql://") {
+        panic!(
+            "DATABASE_URL must be a valid PostgreSQL URL starting with postgres:// or postgresql://. Got: {}",
+            if database_url.len() > 20 { &database_url[..20] } else { &database_url }
+        );
+    }
+    
+    sqlx::postgres::PgPool::connect(&database_url)
+        .await
+        .expect("Failed to connect to database")
 }

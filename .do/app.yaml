@@ -1,0 +1,33 @@
+name: personal-crm
+
+services:
+  - name: api
+    dockerfile_path: Dockerfile
+    github:
+      branch: main
+      deploy_on_push: true
+      repo: mgrantham18/personal-crm
+    health_check:
+      http_path: /health
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: AUTH0_DOMAIN
+        scope: RUN_TIME
+        type: SECRET
+      - key: AUTH0_CLIENT_ID
+        scope: RUN_TIME
+        type: SECRET
+      - key: AUTH0_CLIENT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+
+databases:
+  - name: db
+    engine: PG
+    production: false
+    version: "16"
