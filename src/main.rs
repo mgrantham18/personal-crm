@@ -1,5 +1,5 @@
 use actix_web::{delete, get, patch, post, web, App, HttpResponse, HttpServer, Responder};
-use sqlx::PgPool;
+use sqlx::{PgPool, FromRow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use time::PrimitiveDateTime;
@@ -62,7 +62,7 @@ async fn verify_occasion_ownership(pool: &PgPool, occasion_id: i32, user_id: i32
     Ok(result.is_some())
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, FromRow)]
 struct Contact {
     contact_id: i32,
     first_name: Option<String>,
@@ -155,14 +155,13 @@ async fn list_contacts(
     auth_user: AuthUser,
 ) -> impl Responder {
     // Get contacts for the user
-    let contacts_result = sqlx::query_as!(
-        Contact,
-        r#"SELECT contact_id, first_name, last_name, email as "email?", phone as "phone?", short_note as "short_note?", notes as "notes?" 
+    let contacts_result: Result<Vec<Contact>, _> = sqlx::query_as(
+        "SELECT contact_id, first_name, last_name, email, phone, short_note, notes 
          FROM contacts 
          WHERE user_id = $1 
-         ORDER BY last_name, first_name"#,
-        auth_user.user_id
+         ORDER BY last_name, first_name"
     )
+    .bind(auth_user.user_id)
     .fetch_all(pool.get_ref())
     .await;
 
@@ -371,14 +370,13 @@ async fn get_contact(
     let id = contact_id.into_inner();
     
     // Get the contact
-    let contact_result = sqlx::query_as!(
-        Contact,
-        r#"SELECT contact_id, first_name as "first_name?", last_name as "last_name?", email as "email?", phone as "phone?", short_note as "short_note?", notes as "notes?" 
+    let contact_result: Result<Option<Contact>, _> = sqlx::query_as(
+        "SELECT contact_id, first_name, last_name, email, phone, short_note, notes 
          FROM contacts 
-         WHERE contact_id = $1 AND user_id = $2"#,
-        id,
-        auth_user.user_id
+         WHERE contact_id = $1 AND user_id = $2"
     )
+    .bind(id)
+    .bind(auth_user.user_id)
     .fetch_optional(pool.get_ref())
     .await;
 
