@@ -157,10 +157,10 @@ async fn list_contacts(
     // Get contacts for the user
     let contacts_result = sqlx::query_as!(
         Contact,
-        "SELECT contact_id, first_name, last_name, email, phone, short_note, notes 
+        r#"SELECT contact_id, first_name, last_name, email as "email?", phone as "phone?", short_note as "short_note?", notes as "notes?" 
          FROM contacts 
          WHERE user_id = $1 
-         ORDER BY last_name, first_name",
+         ORDER BY last_name, first_name"#,
         auth_user.user_id
     )
     .fetch_all(pool.get_ref())
@@ -373,9 +373,9 @@ async fn get_contact(
     // Get the contact
     let contact_result = sqlx::query_as!(
         Contact,
-        "SELECT contact_id, first_name, last_name, email, phone, short_note, notes 
+        r#"SELECT contact_id, first_name as "first_name?", last_name as "last_name?", email as "email?", phone as "phone?", short_note as "short_note?", notes as "notes?" 
          FROM contacts 
-         WHERE contact_id = $1 AND user_id = $2",
+         WHERE contact_id = $1 AND user_id = $2"#,
         id,
         auth_user.user_id
     )
