@@ -3,6 +3,25 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use dotenvy::dotenv;
 use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+use moka::future::Cache;
+use std::sync::LazyLock;
+use std::time::Duration;
+
+// Cache for validated tokens (token -> claims) - 5 minute TTL
+static TOKEN_CACHE: LazyLock<Cache<String, Auth0Claims>> = LazyLock::new(|| {
+    Cache::builder()
+        .time_to_live(Duration::from_secs(300))
+        .max_capacity(1000)
+        .build()
+});
+
+// Cache for JWKS - 1 hour TTL
+static JWKS_CACHE: LazyLock<Cache<String, String>> = LazyLock::new(|| {
+    Cache::builder()
+        .time_to_live(Duration::from_secs(3600))
+        .max_capacity(10)
+        .build()
+});
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AuthUser {
@@ -12,7 +31,7 @@ pub struct AuthUser {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Auth0Claims {
     pub sub: String,
     pub email: Option<String>,
@@ -53,6 +72,12 @@ impl FromRequest for AuthUser {
             }
 
             let token = &auth_str[7..];
+            let pool = pool.ok_or_else(|| ErrorUnauthorized("Database not available"))?;
+            
+            // Check token cache first
+            if let Some(cached_claims) = TOKEN_CACHE.get(token).await {
+                return get_or_create_user(&pool, cached_claims).await;
+            }
             
             let auth0_domain = std::env::var("AUTH0_DOMAIN")
                 .unwrap_or_else(|_| "dev-example.auth0.com".to_string());
@@ -66,62 +91,76 @@ impl FromRequest for AuthUser {
                 }
             };
             
-            let pool = pool.ok_or_else(|| ErrorUnauthorized("Database not available"))?;
+            // Cache the validated token
+            TOKEN_CACHE.insert(token.to_string(), claims.clone()).await;
             
-            let user_result = sqlx::query!(
-                "SELECT user_id, auth0_id, email, name FROM users WHERE auth0_id = $1",
-                claims.sub
-            )
-            .fetch_optional(pool.get_ref())
-            .await
-            .map_err(|_| ErrorUnauthorized("Database error"))?;
-            
-            match user_result {
-                Some(user) => Ok(AuthUser {
-                    user_id: user.user_id,
-                    auth0_id: user.auth0_id,
-                    email: Some(user.email),
-                    name: Some(user.name),
-                }),
-                None => {
-                    // Provide defaults for required fields if not present in claims
-                    let email = claims.email.unwrap_or_else(|| format!("{}@unknown.local", claims.sub));
-                    let name = claims.name.unwrap_or_else(|| "Unknown User".to_string());
-                    
-                    let new_user = sqlx::query!(
-                        "INSERT INTO users (auth0_id, email, name) VALUES ($1, $2, $3) RETURNING user_id, auth0_id, email, name",
-                        claims.sub,
-                        email,
-                        name
-                    )
-                    .fetch_one(pool.get_ref())
-                    .await
-                    .map_err(|e| {
-                        eprintln!("Failed to create user: {:?}", e);
-                        ErrorUnauthorized("Failed to create user")
-                    })?;
-                    
-                    Ok(AuthUser {
-                        user_id: new_user.user_id,
-                        auth0_id: new_user.auth0_id,
-                        email: Some(new_user.email),
-                        name: Some(new_user.name),
-                    })
-                }
-            }
+            get_or_create_user(&pool, claims).await
         })
+    }
+}
+
+async fn get_or_create_user(pool: &actix_web::web::Data<PgPool>, claims: Auth0Claims) -> Result<AuthUser, Error> {
+    let user_result = sqlx::query!(
+        "SELECT user_id, auth0_id, email, name FROM users WHERE auth0_id = $1",
+        claims.sub
+    )
+    .fetch_optional(pool.get_ref())
+    .await
+    .map_err(|_| ErrorUnauthorized("Database error"))?;
+    
+    match user_result {
+        Some(user) => Ok(AuthUser {
+            user_id: user.user_id,
+            auth0_id: user.auth0_id,
+            email: Some(user.email),
+            name: Some(user.name),
+        }),
+        None => {
+            // Provide defaults for required fields if not present in claims
+            let email = claims.email.unwrap_or_else(|| format!("{}@unknown.local", claims.sub));
+            let name = claims.name.unwrap_or_else(|| "Unknown User".to_string());
+            
+            let new_user = sqlx::query!(
+                "INSERT INTO users (auth0_id, email, name) VALUES ($1, $2, $3) RETURNING user_id, auth0_id, email, name",
+                claims.sub,
+                email,
+                name
+            )
+            .fetch_one(pool.get_ref())
+            .await
+            .map_err(|e| {
+                eprintln!("Failed to create user: {:?}", e);
+                ErrorUnauthorized("Failed to create user")
+            })?;
+            
+            Ok(AuthUser {
+                user_id: new_user.user_id,
+                auth0_id: new_user.auth0_id,
+                email: Some(new_user.email),
+                name: Some(new_user.name),
+            })
+        }
     }
 }
 
 async fn validate_jwt(token: &str, auth0_domain: &str) -> Result<Auth0Claims, Error> {
     let jwks_uri = format!("https://{}/.well-known/jwks.json", auth0_domain);
     
-    let jwks_response = reqwest::get(&jwks_uri)
-        .await
-        .map_err(|_| ErrorUnauthorized("Failed to fetch JWKS"))?
-        .text()
-        .await
-        .map_err(|_| ErrorUnauthorized("Failed to read JWKS"))?;
+    // Try to get JWKS from cache first
+    let jwks_response = match JWKS_CACHE.get(&jwks_uri).await {
+        Some(cached) => cached,
+        None => {
+            let response = reqwest::get(&jwks_uri)
+                .await
+                .map_err(|_| ErrorUnauthorized("Failed to fetch JWKS"))?
+                .text()
+                .await
+                .map_err(|_| ErrorUnauthorized("Failed to read JWKS"))?;
+            
+            JWKS_CACHE.insert(jwks_uri.clone(), response.clone()).await;
+            response
+        }
+    };
     
     let jwks: serde_json::Value = serde_json::from_str(&jwks_response)
         .map_err(|_| ErrorUnauthorized("Invalid JWKS format"))?;

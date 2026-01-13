@@ -352,6 +352,50 @@ async fn create_contact(
     }
 }
 
+#[post("/contacts/bulk")]
+async fn create_contacts_bulk(
+    pool: web::Data<PgPool>,
+    auth_user: AuthUser,
+    new_contacts: web::Json<Vec<NewContactRequest>>,
+) -> impl Responder {
+    let mut created_ids = Vec::new();
+    let mut errors = Vec::new();
+    
+    for (index, contact) in new_contacts.iter().enumerate() {
+        let result = sqlx::query!(
+            "INSERT INTO contacts (user_id, first_name, last_name, email, phone, short_note, notes) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7) 
+             RETURNING contact_id",
+            auth_user.user_id,
+            contact.first_name.as_deref(),
+            contact.last_name.as_deref(),
+            contact.email.as_deref(),
+            contact.phone.as_deref(),
+            contact.short_note.as_deref(),
+            contact.notes.as_deref(),
+        )
+        .fetch_one(pool.get_ref())
+        .await;
+
+        match result {
+            Ok(record) => created_ids.push(record.contact_id),
+            Err(e) => {
+                eprintln!("Database error creating contact {}: {:?}", index, e);
+                errors.push(serde_json::json!({
+                    "index": index,
+                    "error": format!("{:?}", e)
+                }));
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "created_contact_ids": created_ids,
+        "errors": errors,
+        "message": format!("Created {} contacts", created_ids.len())
+    }))
+}
+
 #[delete("/contacts/{id}")]
 async fn delete_contact(
     pool: web::Data<PgPool>,
@@ -931,6 +975,7 @@ async fn main() {
             .service(list_contacts)
             .service(get_contact)
             .service(create_contact)
+            .service(create_contacts_bulk)
             .service(update_contact)
             .service(delete_contact)
             .service(create_tag)
