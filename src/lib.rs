@@ -84,15 +84,22 @@ impl FromRequest for AuthUser {
                     name: Some(user.name),
                 }),
                 None => {
+                    // Provide defaults for required fields if not present in claims
+                    let email = claims.email.unwrap_or_else(|| format!("{}@unknown.local", claims.sub));
+                    let name = claims.name.unwrap_or_else(|| "Unknown User".to_string());
+                    
                     let new_user = sqlx::query!(
                         "INSERT INTO users (auth0_id, email, name) VALUES ($1, $2, $3) RETURNING user_id, auth0_id, email, name",
                         claims.sub,
-                        claims.email,
-                        claims.name
+                        email,
+                        name
                     )
                     .fetch_one(pool.get_ref())
                     .await
-                    .map_err(|_| ErrorUnauthorized("Failed to create user"))?;
+                    .map_err(|e| {
+                        eprintln!("Failed to create user: {:?}", e);
+                        ErrorUnauthorized("Failed to create user")
+                    })?;
                     
                     Ok(AuthUser {
                         user_id: new_user.user_id,
