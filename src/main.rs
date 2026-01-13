@@ -111,10 +111,59 @@ struct TagResponse {
     tags: Vec<Tag>,
 }
 
+mod date_format {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+    use time::Date;
+    use time::macros::format_description;
+
+    const FORMAT: &[time::format_description::BorrowedFormatItem<'static>] = format_description!("[year]-[month]-[day]");
+
+    pub fn serialize<S>(date: &Date, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = date.format(&FORMAT).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(&s)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Date, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Date::parse(&s, &FORMAT).map_err(serde::de::Error::custom)
+    }
+}
+
+mod datetime_format {
+    use serde::{self, Deserialize, Deserializer, Serializer};
+    use time::PrimitiveDateTime;
+    use time::macros::format_description;
+
+    const FORMAT: &[time::format_description::BorrowedFormatItem<'static>] = format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
+
+    pub fn serialize<S>(dt: &PrimitiveDateTime, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = dt.format(&FORMAT).map_err(serde::ser::Error::custom)?;
+        serializer.serialize_str(&s)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<PrimitiveDateTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        PrimitiveDateTime::parse(&s, &FORMAT).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct Interaction {
     interaction_id: i32,
     contact_id: i32,
+    #[serde(with = "datetime_format")]
     interaction_date: PrimitiveDateTime,
     notes: Option<String>,
     follow_up_priority: Option<i32>,
@@ -123,6 +172,7 @@ struct Interaction {
 #[derive(Deserialize)]
 struct NewInteractionRequest {
     contact_id: i32,
+    #[serde(with = "datetime_format")]
     interaction_date: PrimitiveDateTime,
     notes: Option<String>,
     follow_up_priority: Option<i32>,
@@ -133,6 +183,7 @@ struct Occasion {
     occasion_id: i32,
     contact_id: i32,
     name: String,
+    #[serde(with = "date_format")]
     date: time::Date,
     recurring: Option<bool>,
     recurring_interval: Option<i32>,
@@ -143,6 +194,7 @@ struct Occasion {
 struct NewOccasionRequest {
     contact_id: i32,
     name: String,
+    #[serde(with = "date_format")]
     date: time::Date,
     recurring: bool,
     recurring_interval: Option<i32>,
