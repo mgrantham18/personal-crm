@@ -169,8 +169,11 @@ async fn list_contacts(
     let contacts = match contacts_result {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Database error: {:?}", e);
-            return HttpResponse::InternalServerError().body("Failed to fetch contacts");
+            eprintln!("Database error fetching contacts for user {}: {:?}", auth_user.user_id, e);
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to fetch contacts",
+                "details": format!("{:?}", e)
+            }));
         }
     };
 
@@ -535,8 +538,11 @@ async fn list_tags(
     match result {
         Ok(tags) => HttpResponse::Ok().json(TagResponse { tags }),
         Err(e) => {
-            eprintln!("Database error: {:?}", e);
-            HttpResponse::InternalServerError().body("Failed to fetch tags")
+            eprintln!("Database error fetching tags for user {}: {:?}", auth_user.user_id, e);
+            HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "Failed to fetch tags",
+                "details": format!("{:?}", e)
+            }))
         }
     }
 }
