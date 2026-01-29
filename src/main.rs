@@ -723,6 +723,121 @@ async fn remove_tag_from_contact(
     }
 }
 
+#[derive(Deserialize)]
+struct BulkTagAssignRequest {
+    contact_ids: Vec<i32>,
+}
+
+#[post("/tags/{tag_id}/contacts/bulk")]
+async fn bulk_add_tag_to_contacts(
+    pool: web::Data<PgPool>,
+    auth_user: AuthUser,
+    tag_id: web::Path<i32>,
+    request: web::Json<BulkTagAssignRequest>,
+) -> impl Responder {
+    let tag_id = tag_id.into_inner();
+    
+    // Verify the tag belongs to the user
+    match verify_tag_ownership(pool.get_ref(), tag_id, auth_user.user_id).await {
+        Ok(false) => return HttpResponse::NotFound().body("Tag not found"),
+        Err(e) => {
+            eprintln!("Database error: {:?}", e);
+            return HttpResponse::InternalServerError().body("Database error");
+        }
+        Ok(true) => {}
+    }
+
+    let mut success_count = 0;
+    let mut errors = Vec::new();
+
+    for contact_id in &request.contact_ids {
+        // Verify each contact belongs to the user
+        match verify_contact_ownership(pool.get_ref(), *contact_id, auth_user.user_id).await {
+            Ok(false) => {
+                errors.push(serde_json::json!({"contact_id": contact_id, "error": "Contact not found"}));
+                continue;
+            }
+            Err(e) => {
+                errors.push(serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}));
+                continue;
+            }
+            Ok(true) => {}
+        }
+
+        let result = sqlx::query!(
+            "INSERT INTO contact_tags (contact_id, tag_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            contact_id,
+            tag_id,
+        )
+        .execute(pool.get_ref())
+        .await;
+
+        match result {
+            Ok(_) => success_count += 1,
+            Err(e) => {
+                errors.push(serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}));
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "success_count": success_count,
+        "errors": errors,
+        "message": format!("Added tag to {} contacts", success_count)
+    }))
+}
+
+#[derive(Deserialize)]
+struct BulkDeleteRequest {
+    contact_ids: Vec<i32>,
+}
+
+#[post("/contacts/bulk-delete")]
+async fn bulk_delete_contacts(
+    pool: web::Data<PgPool>,
+    auth_user: AuthUser,
+    request: web::Json<BulkDeleteRequest>,
+) -> impl Responder {
+    let mut success_count = 0;
+    let mut errors = Vec::new();
+
+    for contact_id in &request.contact_ids {
+        // Verify each contact belongs to the user
+        match verify_contact_ownership(pool.get_ref(), *contact_id, auth_user.user_id).await {
+            Ok(false) => {
+                errors.push(serde_json::json!({"contact_id": contact_id, "error": "Contact not found"}));
+                continue;
+            }
+            Err(e) => {
+                errors.push(serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}));
+                continue;
+            }
+            Ok(true) => {}
+        }
+
+        let result = sqlx::query!(
+            "DELETE FROM contacts WHERE contact_id = $1 AND user_id = $2",
+            contact_id,
+            auth_user.user_id,
+        )
+        .execute(pool.get_ref())
+        .await;
+
+        match result {
+            Ok(_) => success_count += 1,
+            Err(e) => {
+                errors.push(serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}));
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({
+        "deleted_count": success_count,
+        "errors": errors,
+        "message": format!("Deleted {} contacts", success_count)
+    }))
+}
+
 #[post("/interactions")]
 async fn create_interaction(
     pool: web::Data<PgPool>,
@@ -984,6 +1099,8 @@ async fn main() {
             .service(list_tags)
             .service(add_tag_to_contact)
             .service(remove_tag_from_contact)
+            .service(bulk_add_tag_to_contacts)
+            .service(bulk_delete_contacts)
             .service(create_interaction)
             .service(delete_interaction)
             .service(update_interaction)
