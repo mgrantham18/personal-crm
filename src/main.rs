@@ -1,9 +1,9 @@
-use actix_web::{delete, get, patch, post, web, App, HttpResponse, HttpServer, Responder};
-use sqlx::{PgPool, FromRow};
+use actix_web::{App, HttpResponse, HttpServer, Responder, delete, get, patch, post, web};
+use personal_crm::{AuthUser, db};
 use serde::{Deserialize, Serialize};
+use sqlx::{FromRow, PgPool};
 use std::collections::HashMap;
 use time::PrimitiveDateTime;
-use personal_crm::{AuthUser, db};
 
 /// Health check endpoint for load balancers and monitoring
 #[get("/health")]
@@ -15,7 +15,11 @@ async fn health_check() -> impl Responder {
 }
 
 /// Verify a contact belongs to the authenticated user
-async fn verify_contact_ownership(pool: &PgPool, contact_id: i32, user_id: i32) -> Result<bool, sqlx::Error> {
+async fn verify_contact_ownership(
+    pool: &PgPool,
+    contact_id: i32,
+    user_id: i32,
+) -> Result<bool, sqlx::Error> {
     let result = sqlx::query!(
         "SELECT contact_id FROM contacts WHERE contact_id = $1 AND user_id = $2",
         contact_id,
@@ -27,7 +31,11 @@ async fn verify_contact_ownership(pool: &PgPool, contact_id: i32, user_id: i32) 
 }
 
 /// Verify a tag belongs to the authenticated user
-async fn verify_tag_ownership(pool: &PgPool, tag_id: i32, user_id: i32) -> Result<bool, sqlx::Error> {
+async fn verify_tag_ownership(
+    pool: &PgPool,
+    tag_id: i32,
+    user_id: i32,
+) -> Result<bool, sqlx::Error> {
     let result = sqlx::query!(
         "SELECT tag_id FROM tags WHERE tag_id = $1 AND user_id = $2",
         tag_id,
@@ -39,7 +47,11 @@ async fn verify_tag_ownership(pool: &PgPool, tag_id: i32, user_id: i32) -> Resul
 }
 
 /// Verify an interaction belongs to the authenticated user
-async fn verify_interaction_ownership(pool: &PgPool, interaction_id: i32, user_id: i32) -> Result<bool, sqlx::Error> {
+async fn verify_interaction_ownership(
+    pool: &PgPool,
+    interaction_id: i32,
+    user_id: i32,
+) -> Result<bool, sqlx::Error> {
     let result = sqlx::query!(
         "SELECT interaction_id FROM interactions WHERE interaction_id = $1 AND user_id = $2",
         interaction_id,
@@ -51,7 +63,11 @@ async fn verify_interaction_ownership(pool: &PgPool, interaction_id: i32, user_i
 }
 
 /// Verify an occasion belongs to the authenticated user
-async fn verify_occasion_ownership(pool: &PgPool, occasion_id: i32, user_id: i32) -> Result<bool, sqlx::Error> {
+async fn verify_occasion_ownership(
+    pool: &PgPool,
+    occasion_id: i32,
+    user_id: i32,
+) -> Result<bool, sqlx::Error> {
     let result = sqlx::query!(
         "SELECT occasion_id FROM occasions WHERE occasion_id = $1 AND user_id = $2",
         occasion_id,
@@ -79,6 +95,98 @@ struct ContactResponse {
     tags: Vec<Tag>,
     interactions: Vec<Interaction>,
     occasions: Vec<Occasion>,
+    predicted_contact_priority: Option<f32>,
+}
+
+impl ContactResponse {
+    /// Calculate predicted contact priority based on interactions and occasions
+    /// This is a placeholder for future implementation
+    /// Currently, we calculate the average number of days between interactions
+    /// and use that to estimate how soon the next interaction should be
+    /// We also increase the score if an occasion is coming up
+    fn new(
+        contact: Contact,
+        tags: Vec<Tag>,
+        interactions: Vec<Interaction>,
+        occasions: Vec<Occasion>,
+    ) -> ContactResponse {
+        let today = time::OffsetDateTime::now_utc().date();
+        let days_to_closest_occasion = if !occasions.is_empty() {
+            occasions
+                .iter()
+                .map(|occasion| {
+                    let occasion_date = time::Date::from_calendar_date(
+                        today.year(),
+                        occasion.date.month(),
+                        occasion.date.day(),
+                    )
+                    .unwrap();
+                    let delta = occasion_date - today;
+                    delta.whole_days()
+                })
+                .filter(|&days| days >= 0)
+                .min()
+        } else {
+            None
+        };
+
+        let offset_from_last_interaction = if interactions.len() >= 2 {
+            let mut total_days = 0;
+            for i in 1..interactions.len() {
+                let delta = interactions[i].interaction_date.date()
+                    - interactions[i - 1].interaction_date.date();
+                total_days += delta.whole_days();
+            }
+            let avg_days = total_days as f32 / (interactions.len() - 1) as f32;
+            let last_interaction = interactions.last().unwrap();
+            let delta = today - last_interaction.interaction_date.date();
+            Some(delta.whole_days() as f32 - avg_days)
+        } else {
+            None
+        };
+
+        let predicted_contact_priority =
+            match (days_to_closest_occasion, offset_from_last_interaction) {
+                (Some(occ_days), Some(int_days)) => {
+                    let occasion_score = if occ_days < 7 {
+                        10.0
+                    } else if occ_days < 30 {
+                        5.0
+                    } else if occ_days < 90 {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    Some(int_days + occasion_score)
+                }
+                (Some(occ_days), None) => {
+                    // Only occasion data available
+                    let occasion_score = if occ_days < 7 {
+                        10.0
+                    } else if occ_days < 30 {
+                        5.0
+                    } else if occ_days < 90 {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    Some(occasion_score)
+                }
+                (None, Some(int_days)) => {
+                    // Only interaction data available
+                    Some(int_days)
+                }
+                (None, None) => None, // No data available
+            };
+
+        ContactResponse {
+            contact,
+            tags,
+            interactions,
+            occasions,
+            predicted_contact_priority,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -116,7 +224,8 @@ mod date_format {
     use time::Date;
     use time::macros::format_description;
 
-    const FORMAT: &[time::format_description::BorrowedFormatItem<'static>] = format_description!("[year]-[month]-[day]");
+    const FORMAT: &[time::format_description::BorrowedFormatItem<'static>] =
+        format_description!("[year]-[month]-[day]");
 
     pub fn serialize<S>(date: &Date, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -140,7 +249,8 @@ mod datetime_format {
     use time::PrimitiveDateTime;
     use time::macros::format_description;
 
-    const FORMAT: &[time::format_description::BorrowedFormatItem<'static>] = format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
+    const FORMAT: &[time::format_description::BorrowedFormatItem<'static>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
 
     pub fn serialize<S>(dt: &PrimitiveDateTime, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -202,16 +312,13 @@ struct NewOccasionRequest {
 }
 
 #[get("/contacts")]
-async fn list_contacts(
-    pool: web::Data<PgPool>,
-    auth_user: AuthUser,
-) -> impl Responder {
+async fn list_contacts(pool: web::Data<PgPool>, auth_user: AuthUser) -> impl Responder {
     // Get contacts for the user
     let contacts_result: Result<Vec<Contact>, _> = sqlx::query_as(
         "SELECT contact_id, first_name, last_name, email, phone, short_note, notes 
          FROM contacts 
          WHERE user_id = $1 
-         ORDER BY last_name, first_name"
+         ORDER BY last_name, first_name",
     )
     .bind(auth_user.user_id)
     .fetch_all(pool.get_ref())
@@ -220,7 +327,10 @@ async fn list_contacts(
     let contacts = match contacts_result {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Database error fetching contacts for user {}: {:?}", auth_user.user_id, e);
+            eprintln!(
+                "Database error fetching contacts for user {}: {:?}",
+                auth_user.user_id, e
+            );
             return HttpResponse::InternalServerError().json(serde_json::json!({
                 "error": "Failed to fetch contacts",
                 "details": format!("{:?}", e)
@@ -307,12 +417,12 @@ async fn list_contacts(
         .into_iter()
         .map(|contact| {
             let contact_id = contact.contact_id;
-            ContactResponse {
+            ContactResponse::new(
                 contact,
-                tags: tags_map.remove(&contact_id).unwrap_or_default(),
-                interactions: interactions_map.remove(&contact_id).unwrap_or_default(),
-                occasions: occasions_map.remove(&contact_id).unwrap_or_default(),
-            }
+                tags_map.remove(&contact_id).unwrap_or_default(),
+                interactions_map.remove(&contact_id).unwrap_or_default(),
+                occasions_map.remove(&contact_id).unwrap_or_default(),
+            )
         })
         .collect();
 
@@ -360,7 +470,7 @@ async fn create_contacts_bulk(
 ) -> impl Responder {
     let mut created_ids = Vec::new();
     let mut errors = Vec::new();
-    
+
     for (index, contact) in new_contacts.iter().enumerate() {
         let result = sqlx::query!(
             "INSERT INTO contacts (user_id, first_name, last_name, email, phone, short_note, notes) 
@@ -403,7 +513,7 @@ async fn delete_contact(
     contact_id: web::Path<i32>,
 ) -> impl Responder {
     let id = contact_id.into_inner();
-    
+
     let result = sqlx::query!(
         "DELETE FROM contacts WHERE contact_id = $1 AND user_id = $2",
         id,
@@ -430,7 +540,7 @@ async fn update_contact(
     updated_contact: web::Json<NewContactRequest>,
 ) -> impl Responder {
     let id = contact_id.into_inner();
-    
+
     let result = sqlx::query!(
         "UPDATE contacts 
          SET first_name = $1, last_name = $2, email = $3, phone = $4, short_note = $5, notes = $6 
@@ -464,12 +574,12 @@ async fn get_contact(
     contact_id: web::Path<i32>,
 ) -> impl Responder {
     let id = contact_id.into_inner();
-    
+
     // Get the contact
     let contact_result: Result<Option<Contact>, _> = sqlx::query_as(
         "SELECT contact_id, first_name, last_name, email, phone, short_note, notes 
          FROM contacts 
-         WHERE contact_id = $1 AND user_id = $2"
+         WHERE contact_id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(auth_user.user_id)
@@ -522,12 +632,7 @@ async fn get_contact(
     .await
     .unwrap_or_default();
 
-    HttpResponse::Ok().json(ContactResponse {
-        contact,
-        tags,
-        interactions,
-        occasions,
-    })
+    HttpResponse::Ok().json(ContactResponse::new(contact, tags, interactions, occasions))
 }
 
 #[post("/tags")]
@@ -567,7 +672,7 @@ async fn delete_tag(
     tag_id: web::Path<i32>,
 ) -> impl Responder {
     let id = tag_id.into_inner();
-    
+
     let result = sqlx::query!(
         "DELETE FROM tags WHERE tag_id = $1 AND user_id = $2",
         id,
@@ -594,7 +699,7 @@ async fn update_tag(
     updated_tag: web::Json<NewTagRequest>,
 ) -> impl Responder {
     let id = tag_id.into_inner();
-    
+
     let result = sqlx::query!(
         "UPDATE tags SET name = $1, color = $2, details = $3 WHERE tag_id = $4 AND user_id = $5",
         updated_tag.name,
@@ -617,10 +722,7 @@ async fn update_tag(
 }
 
 #[get("/tags")]
-async fn list_tags(
-    pool: web::Data<PgPool>,
-    auth_user: AuthUser,
-) -> impl Responder {
+async fn list_tags(pool: web::Data<PgPool>, auth_user: AuthUser) -> impl Responder {
     let result = sqlx::query_as!(
         Tag,
         "SELECT tag_id, name, color, details FROM tags WHERE user_id = $1",
@@ -632,7 +734,10 @@ async fn list_tags(
     match result {
         Ok(tags) => HttpResponse::Ok().json(TagResponse { tags }),
         Err(e) => {
-            eprintln!("Database error fetching tags for user {}: {:?}", auth_user.user_id, e);
+            eprintln!(
+                "Database error fetching tags for user {}: {:?}",
+                auth_user.user_id, e
+            );
             HttpResponse::InternalServerError().json(serde_json::json!({
                 "error": "Failed to fetch tags",
                 "details": format!("{:?}", e)
@@ -648,7 +753,7 @@ async fn add_tag_to_contact(
     path: web::Path<(i32, i32)>,
 ) -> impl Responder {
     let (contact_id, tag_id) = path.into_inner();
-    
+
     // Verify the contact belongs to the user
     match verify_contact_ownership(pool.get_ref(), contact_id, auth_user.user_id).await {
         Ok(false) => return HttpResponse::NotFound().body("Contact not found"),
@@ -695,7 +800,7 @@ async fn remove_tag_from_contact(
     path: web::Path<(i32, i32)>,
 ) -> impl Responder {
     let (contact_id, tag_id) = path.into_inner();
-    
+
     // Verify the contact belongs to the user
     match verify_contact_ownership(pool.get_ref(), contact_id, auth_user.user_id).await {
         Ok(false) => return HttpResponse::NotFound().body("Contact not found"),
@@ -736,7 +841,7 @@ async fn bulk_add_tag_to_contacts(
     request: web::Json<BulkTagAssignRequest>,
 ) -> impl Responder {
     let tag_id = tag_id.into_inner();
-    
+
     // Verify the tag belongs to the user
     match verify_tag_ownership(pool.get_ref(), tag_id, auth_user.user_id).await {
         Ok(false) => return HttpResponse::NotFound().body("Tag not found"),
@@ -754,11 +859,15 @@ async fn bulk_add_tag_to_contacts(
         // Verify each contact belongs to the user
         match verify_contact_ownership(pool.get_ref(), *contact_id, auth_user.user_id).await {
             Ok(false) => {
-                errors.push(serde_json::json!({"contact_id": contact_id, "error": "Contact not found"}));
+                errors.push(
+                    serde_json::json!({"contact_id": contact_id, "error": "Contact not found"}),
+                );
                 continue;
             }
             Err(e) => {
-                errors.push(serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}));
+                errors.push(
+                    serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}),
+                );
                 continue;
             }
             Ok(true) => {}
@@ -775,7 +884,9 @@ async fn bulk_add_tag_to_contacts(
         match result {
             Ok(_) => success_count += 1,
             Err(e) => {
-                errors.push(serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}));
+                errors.push(
+                    serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}),
+                );
             }
         }
     }
@@ -805,11 +916,15 @@ async fn bulk_delete_contacts(
         // Verify each contact belongs to the user
         match verify_contact_ownership(pool.get_ref(), *contact_id, auth_user.user_id).await {
             Ok(false) => {
-                errors.push(serde_json::json!({"contact_id": contact_id, "error": "Contact not found"}));
+                errors.push(
+                    serde_json::json!({"contact_id": contact_id, "error": "Contact not found"}),
+                );
                 continue;
             }
             Err(e) => {
-                errors.push(serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}));
+                errors.push(
+                    serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}),
+                );
                 continue;
             }
             Ok(true) => {}
@@ -826,7 +941,9 @@ async fn bulk_delete_contacts(
         match result {
             Ok(_) => success_count += 1,
             Err(e) => {
-                errors.push(serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}));
+                errors.push(
+                    serde_json::json!({"contact_id": contact_id, "error": format!("{:?}", e)}),
+                );
             }
         }
     }
@@ -845,7 +962,13 @@ async fn create_interaction(
     new_interaction: web::Json<NewInteractionRequest>,
 ) -> impl Responder {
     // Verify the contact belongs to the user
-    match verify_contact_ownership(pool.get_ref(), new_interaction.contact_id, auth_user.user_id).await {
+    match verify_contact_ownership(
+        pool.get_ref(),
+        new_interaction.contact_id,
+        auth_user.user_id,
+    )
+    .await
+    {
         Ok(false) => return HttpResponse::NotFound().body("Contact not found"),
         Err(e) => {
             eprintln!("Database error: {:?}", e);
@@ -886,7 +1009,7 @@ async fn delete_interaction(
     interaction_id: web::Path<i32>,
 ) -> impl Responder {
     let id = interaction_id.into_inner();
-    
+
     // Verify the interaction belongs to the user
     match verify_interaction_ownership(pool.get_ref(), id, auth_user.user_id).await {
         Ok(false) => return HttpResponse::NotFound().body("Interaction not found"),
@@ -922,7 +1045,7 @@ async fn update_interaction(
     updated_interaction: web::Json<NewInteractionRequest>,
 ) -> impl Responder {
     let id = interaction_id.into_inner();
-    
+
     // Verify the interaction belongs to the user
     match verify_interaction_ownership(pool.get_ref(), id, auth_user.user_id).await {
         Ok(false) => return HttpResponse::NotFound().body("Interaction not found"),
@@ -960,7 +1083,8 @@ async fn create_occasion(
     new_occasion: web::Json<NewOccasionRequest>,
 ) -> impl Responder {
     // Verify the contact belongs to the user
-    match verify_contact_ownership(pool.get_ref(), new_occasion.contact_id, auth_user.user_id).await {
+    match verify_contact_ownership(pool.get_ref(), new_occasion.contact_id, auth_user.user_id).await
+    {
         Ok(false) => return HttpResponse::NotFound().body("Contact not found"),
         Err(e) => {
             eprintln!("Database error: {:?}", e);
@@ -1003,7 +1127,7 @@ async fn delete_occasion(
     occasion_id: web::Path<i32>,
 ) -> impl Responder {
     let id = occasion_id.into_inner();
-    
+
     // Verify the occasion belongs to the user
     match verify_occasion_ownership(pool.get_ref(), id, auth_user.user_id).await {
         Ok(false) => return HttpResponse::NotFound().body("Occasion not found"),
@@ -1040,7 +1164,7 @@ async fn update_occasion(
     updated_occasion: web::Json<NewOccasionRequest>,
 ) -> impl Responder {
     let id = occasion_id.into_inner();
-    
+
     // Verify the occasion belongs to the user
     match verify_occasion_ownership(pool.get_ref(), id, auth_user.user_id).await {
         Ok(false) => return HttpResponse::NotFound().body("Occasion not found"),
@@ -1076,13 +1200,13 @@ async fn update_occasion(
 #[actix_web::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    
+
     let pool = db().await;
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let bind_addr = format!("0.0.0.0:{}", port);
-    
+
     println!("Starting server on {}", bind_addr);
-    
+
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))

@@ -1,6 +1,6 @@
 use sqlx::PgPool;
-use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
+use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 
 pub struct TestContext {
@@ -26,20 +26,16 @@ pub async fn setup_test_db() -> TestContext {
     }
 
     // Otherwise, start PostgreSQL container
-    let container = Postgres::default()
-        .start()
-        .await
-        .expect("Failed to start postgres container. Either install Docker or set TEST_DATABASE_URL");
-    
+    let container = Postgres::default().start().await.expect(
+        "Failed to start postgres container. Either install Docker or set TEST_DATABASE_URL",
+    );
+
     let port = container
         .get_host_port_ipv4(5432)
         .await
         .expect("Failed to get container port");
-    
-    let database_url = format!(
-        "postgres://postgres:postgres@127.0.0.1:{}/postgres",
-        port
-    );
+
+    let database_url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
 
     // Connect to database
     let pool = PgPool::connect(&database_url)
@@ -92,7 +88,7 @@ fn generate_unique_id() -> String {
 
 pub async fn setup_test_user(pool: &PgPool) -> i32 {
     let unique_id = generate_unique_id();
-    
+
     let result = sqlx::query!(
         "INSERT INTO users (auth0_id, name, email) VALUES ($1, $2, $3) RETURNING user_id",
         unique_id,

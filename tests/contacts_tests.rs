@@ -7,7 +7,7 @@ use common::*;
 async fn test_create_contact() {
     let test_ctx = setup_test_db().await;
     let user_id = setup_test_user(&test_ctx.pool).await;
-    
+
     // Create a contact
     let result = sqlx::query!(
         "INSERT INTO contacts (user_id, first_name, last_name, email, phone, short_note, notes) 
@@ -46,7 +46,7 @@ async fn test_create_contact() {
 async fn test_update_contact() {
     let test_ctx = setup_test_db().await;
     let user_id = setup_test_user(&test_ctx.pool).await;
-    
+
     // Create a contact first
     let contact_id = sqlx::query!(
         "INSERT INTO contacts (user_id, first_name, last_name, email) 
@@ -95,7 +95,7 @@ async fn test_update_contact() {
 async fn test_delete_contact() {
     let test_ctx = setup_test_db().await;
     let user_id = setup_test_user(&test_ctx.pool).await;
-    
+
     // Create a contact first
     let contact_id = sqlx::query!(
         "INSERT INTO contacts (user_id, first_name, last_name, email) 
@@ -137,7 +137,7 @@ async fn test_delete_contact() {
 async fn test_list_contacts() {
     let test_ctx = setup_test_db().await;
     let user_id = setup_test_user(&test_ctx.pool).await;
-    
+
     // Create multiple contacts
     for i in 1..=3 {
         sqlx::query!(

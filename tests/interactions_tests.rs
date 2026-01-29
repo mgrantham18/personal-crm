@@ -8,7 +8,7 @@ use time::macros::datetime;
 async fn test_create_interaction() {
     let test_ctx = setup_test_db().await;
     let user_id = setup_test_user(&test_ctx.pool).await;
-    
+
     // Create a contact first
     let contact_id = sqlx::query!(
         "INSERT INTO contacts (user_id, first_name, last_name, email) 
@@ -24,7 +24,7 @@ async fn test_create_interaction() {
     .contact_id;
 
     let interaction_date = datetime!(2026-01-04 14:30:00);
-    
+
     // Create an interaction
     let result = sqlx::query!(
         "INSERT INTO interactions (contact_id, interaction_date, notes, followup_priority) 
@@ -59,7 +59,7 @@ async fn test_create_interaction() {
 async fn test_update_interaction() {
     let test_ctx = setup_test_db().await;
     let user_id = setup_test_user(&test_ctx.pool).await;
-    
+
     // Create a contact
     let contact_id = sqlx::query!(
         "INSERT INTO contacts (user_id, first_name, last_name, email) 
@@ -75,7 +75,7 @@ async fn test_update_interaction() {
     .contact_id;
 
     let interaction_date = datetime!(2026-01-01 10:00:00);
-    
+
     // Create an interaction
     let interaction_id = sqlx::query!(
         "INSERT INTO interactions (contact_id, interaction_date, notes, followup_priority) 
@@ -112,7 +112,10 @@ async fn test_update_interaction() {
     .await
     .expect("Failed to fetch updated interaction");
 
-    assert_eq!(result.notes, Some("Follow-up meeting - discussed project".to_string()));
+    assert_eq!(
+        result.notes,
+        Some("Follow-up meeting - discussed project".to_string())
+    );
     assert_eq!(result.followup_priority, Some(5));
 }
 
@@ -121,7 +124,7 @@ async fn test_update_interaction() {
 async fn test_delete_interaction() {
     let test_ctx = setup_test_db().await;
     let user_id = setup_test_user(&test_ctx.pool).await;
-    
+
     // Create a contact
     let contact_id = sqlx::query!(
         "INSERT INTO contacts (user_id, first_name, last_name, email) 
@@ -137,7 +140,7 @@ async fn test_delete_interaction() {
     .contact_id;
 
     let interaction_date = datetime!(2026-01-03 15:00:00);
-    
+
     // Create an interaction
     let interaction_id = sqlx::query!(
         "INSERT INTO interactions (contact_id, interaction_date, notes) 
