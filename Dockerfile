@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y \
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
 
-# Copy sqlx offline query cache
-COPY .sqlx ./.sqlx
+# SQLX prepare
+RUN cargo sqlx prepare
 
 # Create a dummy main.rs to build dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs && echo "" > src/lib.rs
