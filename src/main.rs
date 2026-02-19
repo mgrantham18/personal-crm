@@ -1197,6 +1197,21 @@ async fn update_occasion(
     }
 }
 
+/// Delete the authenticated user's account and all associated data
+#[delete("/account")]
+async fn delete_account(pool: web::Data<PgPool>, auth_user: AuthUser) -> impl Responder {
+    match sqlx::query!("DELETE FROM users WHERE user_id = $1", auth_user.user_id)
+        .execute(pool.get_ref())
+        .await
+    {
+        Ok(_) => HttpResponse::NoContent().finish(),
+        Err(e) => {
+            eprintln!("Failed to delete account: {:?}", e);
+            HttpResponse::InternalServerError().body("Failed to delete account")
+        }
+    }
+}
+
 #[actix_web::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -1231,6 +1246,7 @@ async fn main() {
             .service(create_occasion)
             .service(delete_occasion)
             .service(update_occasion)
+            .service(delete_account)
     })
     .bind(&bind_addr)
     .expect(&format!("Failed to bind to {}", bind_addr))
