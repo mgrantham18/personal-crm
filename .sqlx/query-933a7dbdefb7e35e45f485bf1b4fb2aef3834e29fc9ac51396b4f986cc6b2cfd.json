@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT occasion_id, contact_id, name, date, recurring, recurring_interval, details\n         FROM occasions \n         WHERE contact_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "occasion_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "contact_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "date",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 4,
+        "name": "recurring",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "recurring_interval",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "details",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "933a7dbdefb7e35e45f485bf1b4fb2aef3834e29fc9ac51396b4f986cc6b2cfd"
+}

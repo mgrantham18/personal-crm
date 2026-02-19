@@ -9,11 +9,9 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy manifests
+# Copy manifests and sqlx offline cache
 COPY Cargo.toml Cargo.lock ./
-
-# SQLX prepare
-RUN cargo sqlx prepare
+COPY .sqlx ./.sqlx
 
 # Create a dummy main.rs to build dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs && echo "" > src/lib.rs

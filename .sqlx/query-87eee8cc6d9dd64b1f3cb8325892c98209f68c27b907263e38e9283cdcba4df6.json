@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO occasions (user_id, contact_id, name, date, recurring, recurring_interval, details) \n         VALUES ($1, $2, $3, $4, $5, $6, $7) \n         RETURNING occasion_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "occasion_id",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4",
+        "Varchar",
+        "Date",
+        "Bool",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "87eee8cc6d9dd64b1f3cb8325892c98209f68c27b907263e38e9283cdcba4df6"
+}

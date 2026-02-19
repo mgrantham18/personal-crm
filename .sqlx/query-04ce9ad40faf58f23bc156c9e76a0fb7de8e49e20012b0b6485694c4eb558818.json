@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE tags SET name = $1, color = $2, details = $3 WHERE tag_id = $4 AND user_id = $5",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "04ce9ad40faf58f23bc156c9e76a0fb7de8e49e20012b0b6485694c4eb558818"
+}
